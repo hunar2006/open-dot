@@ -42,7 +42,12 @@ try {
   app = await _electron.launch({ ...options, env, timeout: 60_000 });
   const page = await app.firstWindow();
   const errors = [];
-  page.on("pageerror", err => errors.push(err.message));
+  const captureErrors = (window) => window.on("pageerror", err => {
+    const detail = `${window.url()}\n${err.stack ?? err.message}`;
+    errors.push(detail);
+    console.error("Desktop page error:", detail);
+  });
+  captureErrors(page);
   page.on("response", r => { if (r.url().includes("/stream?")) console.log("Live response", r.status(), r.headers()["content-type"], r.headers()["content-encoding"] ?? "uncompressed"); });
   await page.waitForURL("http://localhost:3100/**", { timeout: 60_000 });
   await page.waitForLoadState("load");
@@ -193,6 +198,7 @@ try {
   // Restart persistence check
   app = await _electron.launch({ ...options, env, timeout: 60_000 });
   const reopened = await app.firstWindow();
+  captureErrors(reopened);
   await reopened.waitForURL("http://localhost:3100/**", { timeout: 60_000 });
   await reopened.waitForLoadState("load");
   await reopened.goto("http://localhost:3100/settings");
