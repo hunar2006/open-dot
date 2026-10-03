@@ -10,7 +10,7 @@ const root = path.resolve(import.meta.dirname, "..");
 if (process.platform !== "win32") throw new Error("Run this router/vault acceptance check on Windows.");
 const temp = fs.mkdtempSync(path.join(root, ".windows-check-routers-"));
 process.env.DOTS_DATA_DIR = temp;
-for (const name of ["OPENAI_API_KEY", "OPENROUTER_API_KEY", "TOKENROUTER_API_KEY", "TOKENROUTER_IO_API_KEY", "TOKENROUTER_ME_API_KEY", "AGENTROUTER_API_KEY", "NARAROUTER_API_KEY", "DOTS_MODEL", "DOTS_REVIEW_MODEL"]) delete process.env[name];
+for (const name of ["OPENAI_API_KEY", "OPENROUTER_API_KEY", "TOKENROUTER_API_KEY", "TOKENROUTER_IO_API_KEY", "TOKENROUTER_ME_API_KEY", "AGENTROUTER_API_KEY", "NARAROUTER_API_KEY", "CMD_API_KEY", "DOTS_MODEL", "DOTS_REVIEW_MODEL"]) delete process.env[name];
 await import("./windows-test-loader.mjs");
 registerHooks({ resolve(specifier, context, next) {
   if (context.parentURL?.endsWith("/src/server/agent/routers.ts") && specifier === "node:dns/promises") return { url: "data:text/javascript," + encodeURIComponent("export async function lookup(host){return [{address:host==='private.fixture.test'?'127.0.0.1':'203.0.113.10',family:4}]};"), shortCircuit: true };
@@ -25,7 +25,7 @@ globalThis.fetch = async (input, init = {}) => {
   const url = new URL(input instanceof Request ? input.url : String(input));
   const body = init.body ? JSON.parse(init.body) : null;
   const headers = new Headers(init.headers);
-  requests.push({ url: url.href, body, auth: headers.get("Authorization"), accept: headers.get("Accept"), redirect: init.redirect });
+  requests.push({ url: url.href, body, auth: headers.get("Authorization"), accept: headers.get("Accept"), version: headers.get("anthropic-version"), redirect: init.redirect });
   if (errorResponse) return errorResponse();
   if (failure) return Response.json({ error: { message: headers.get("Authorization") } }, { status: failure });
   if (url.pathname.endsWith("/key")) return Response.json({ data: { label: "synthetic" } });
@@ -33,6 +33,12 @@ globalThis.fetch = async (input, init = {}) => {
     if (url.hostname === "api.openai.com") return Response.json({ object: "list", data: [{ id: "gpt-5.5" }, { id: "gpt-5.4-mini" }], has_more: false });
     if (catalogMode === "missing") return Response.json({}, { status: 404 });
     if (catalogMode === "html") return new Response("<html>wrong endpoint</html>");
+    if (catalogMode === "commandcode" && url.hostname === "api.commandcode.ai") return Response.json({ data: [
+      { id: "deepseek/fixture-flash", supported_endpoints: ["/chat/completions", "/responses"] },
+      { id: "claude-fixture", supported_endpoints: ["/messages"] },
+      { id: "typesafe/jev", supported_endpoints: ["/systemone"] },
+      { id: "not-a-chat-model", supported_endpoints: ["/systemone"] },
+    ] });
     if (catalogMode === "free" && url.hostname === "openrouter.ai") {
       const data = [{ id: "moonshotai/kimi-k2", supported_parameters: ["tools"] }, { id: "text-only-fixture", supported_parameters: ["temperature"] }, ...Array.from({ length: 220 }, (_, i) => ({ id: `paid-fixture-${i}` })), { id: "openrouter/free", supported_parameters: ["tools", "structured_outputs"] }];
       // Reproduce the public API: its server-side tools filter omits the free router.
@@ -44,6 +50,32 @@ globalThis.fetch = async (input, init = {}) => {
   const outputLimit = body.max_output_tokens ?? body.max_tokens ?? 131072;
   if (outputLimit > 2834) return Response.json({ error: { message: `This request requires more credits, or fewer max_tokens. You requested up to ${outputLimit} tokens, but can only afford 2834.` } }, { status: 402 });
   if (url.pathname.endsWith("/responses")) return Response.json({ id: "resp_fixture", object: "response", model: body.model, output: [{ type: "message", id: "msg_native", role: "assistant", status: "completed", content: [{ type: "output_text", text: body.text?.format?.name === "verdict" ? '{"applying_rules":[]}' : "native response", annotations: [] }] }], status: "completed" });
+  if (url.pathname.endsWith("/messages")) {
+    assert.equal(url.href, "https://api.commandcode.ai/provider/v1/messages");
+    assert.equal(headers.get("anthropic-version"), "2023-06-01");
+    assert(!("response_format" in body) && !("store" in body) && !("previous_response_id" in body));
+    if (!body.stream) return Response.json({ id: "msg_claude", type: "message", role: "assistant", model: body.model, stop_reason: streamMode === "length" ? "max_tokens" : "end_turn", content: [{ type: "text", text: body.output_config ? '{"applying_rules":[1]}' : "Claude reply" }] });
+    const events = [
+      { type: "message_start", message: { id: "msg_claude", model: body.model, content: [], stop_reason: null } },
+      { type: "ping" },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "Hello " } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Claude" } },
+      { type: "content_block_stop", index: 0 },
+      { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "call_claude", name: "read_page", input: {} } },
+      { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"url":' } },
+      { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: streamMode === "bad-arguments" ? "broken" : '"https://example.org"}' } },
+      { type: "content_block_stop", index: 1 },
+      { type: "message_delta", delta: { stop_reason: streamMode === "length" ? "max_tokens" : "tool_use" }, usage: { output_tokens: 42 } },
+    ];
+    if (streamMode === "provider-error") events.push({ type: "error", error: { message: "fixture-secret-commandcode" } });
+    if (streamMode !== "truncated") events.push({ type: "message_stop" });
+    const wire = new TextEncoder().encode(events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(""));
+    let offset = 0;
+    return new Response(new ReadableStream({ pull(controller) {
+      if (offset === wire.length) { controller.close(); return; }
+      const end = Math.min(offset + 17, wire.length); controller.enqueue(wire.slice(offset, end)); offset = end;
+    } }), { headers: { "Content-Type": "text/event-stream" } });
+  }
   assert(url.pathname.endsWith("/chat/completions"), "Unexpected request: network access refused by test");
   if (!body.stream) return Response.json({ id: "chat_fixture", object: "chat.completion", model: body.model, choices: [{ index: 0, message: { role: "assistant", content: '{"applying_rules":[]}', tool_calls: [] }, finish_reason: "stop" }] });
   const delta = (value, finish_reason = null) => ({ id: "chat_fixture", model: body.model, choices: [{ index: 0, delta: value, finish_reason }] });
@@ -57,6 +89,7 @@ globalThis.fetch = async (input, init = {}) => {
 const routers = await import("../src/server/agent/routers.ts");
 const { clientFor, canThink, modelFor, models, resetModels, saveApiKey } = await import("../src/server/agent/client.ts");
 const { chatRequest } = await import("../src/server/agent/router-chat.ts");
+const { anthropicRequest } = await import("../src/server/agent/router-anthropic.ts");
 const { db, getSetting, setSetting } = await import("../src/server/db.ts");
 const { seal } = await import("../src/server/vault.ts");
 try {
@@ -170,6 +203,62 @@ try {
   assert.equal(requests.at(-1).body.model, "openrouter/free", "Rule review must use the free dispatcher");
   assert.equal(requests.at(-1).body.max_output_tokens, 512, "Rule reviews must use their smaller allowance");
   delete process.env.OPENAI_API_KEY;
+  // One saved Command Code connection must route each model correctly, including a cached-client switch.
+  catalogMode = "commandcode";
+  const command = ROUTER_PROVIDERS.find((p) => p.id === "commandcode");
+  assert.equal(await routers.saveRouter(command.id, "fixture-secret-commandcode", command.baseURL, ""), null);
+  const commandModels = (await routers.routerModels()).filter((id) => id.startsWith("commandcode:"));
+  assert.deepEqual(commandModels, ["commandcode:deepseek/fixture-flash", "commandcode:claude-fixture"]);
+  const claude = clientFor("commandcode:claude-fixture");
+  const schema = { type: "object", properties: { applying_rules: { type: "array", items: { type: "integer" } } }, required: ["applying_rules"], additionalProperties: false };
+  const json = await claude.client.responses.create({ model: claude.model, instructions: "Check these rules", input: "Synthetic review", max_output_tokens: 512, text: { format: { type: "json_schema", name: "verdict", schema, strict: true } } });
+  assert.deepEqual(JSON.parse(json.output_text), { applying_rules: [1] });
+  assert.equal(requests.at(-1).body.system, "Check these rules");
+  assert.deepEqual(requests.at(-1).body.output_config.format, { type: "json_schema", schema });
+  assert.equal(requests.at(-1).body.max_tokens, 512);
+  const claudeStream = await claude.client.responses.create({ model: claude.model, input: [{ role: "user", content: [{ type: "input_text", text: "Read this" }, { type: "input_image", image_url: "data:image/png;base64,Zml4dHVyZQ==", detail: "auto" }] }], tools: [functionTool], stream: true });
+  const claudeEvents = []; for await (const e of claudeStream) claudeEvents.push(e);
+  assert.equal(claudeEvents.filter((e) => e.type === "response.output_text.delta").map((e) => e.delta).join(""), "Hello Claude");
+  assert.equal(claudeEvents.at(-1).type, "response.completed");
+  const claudeFinal = claudeEvents.at(-1).response;
+  assert.equal(claudeFinal.output[1].call_id, "call_claude");
+  assert.deepEqual(JSON.parse(claudeFinal.output[1].arguments), { url: "https://example.org" });
+  assert.deepEqual(requests.at(-1).body.messages[0].content[1].source, { type: "base64", media_type: "image/png", data: "Zml4dHVyZQ==" });
+  assert.deepEqual(requests.at(-1).body.tools[0], { name: "read_page", input_schema: { type: "object" } });
+  assert.equal(requests.at(-1).body.tool_choice.disable_parallel_tool_use, true);
+  assert.equal(requests.at(-1).body.max_tokens, 2048);
+  const replayInput = [{ role: "user", content: "question" }, ...claudeFinal.output, { type: "function_call", call_id: "c2", name: "read_page", arguments: "{}" }, { type: "function_call_output", call_id: "call_claude", output: "approved page result" }, { type: "function_call_output", call_id: "c2", output: "second result" }];
+  const replayClaude = anthropicRequest({ model: claude.model, input: replayInput });
+  assert.equal(replayClaude.messages[1].content.filter((b) => b.type === "tool_use").length, 2);
+  assert.equal(replayClaude.messages[2].content.length, 2);
+  assert.equal(replayClaude.messages[2].content[0].tool_use_id, "call_claude");
+  await claude.client.responses.create({ model: claude.model, input: replayInput });
+  assert.deepEqual(requests.at(-1).body.messages, replayClaude.messages, "Approval/tool results must reach Claude on resumed turns");
+  const generic = clientFor("commandcode:deepseek/fixture-flash");
+  assert.equal(generic.client, claude.client, "Both protocols must work through the same cached provider client");
+  await generic.client.responses.create({ model: generic.model, input: "Other model" });
+  assert(requests.at(-1).url.endsWith("/chat/completions"));
+  await claude.client.responses.create({ model: claude.model, input: "Back to Claude" });
+  assert(requests.at(-1).url.endsWith("/messages"));
+  const beforeUnsupported = requests.length;
+  for (const route of [generic, claude]) await assert.rejects(() => route.client.responses.create({ model: route.model, input: [{ role: "user", content: [{ type: "input_file", filename: "fixture.pdf", file_data: "data:application/pdf;base64,Zml4dHVyZQ==" }] }] }), /not file attachments/);
+  await assert.rejects(() => generic.client.responses.create({ model: "typesafe/jev", input: "Not a chat model" }), /decision model/);
+  assert.equal(requests.length, beforeUnsupported, "Unsupported inputs/models must be refused before a billable request");
+  for (const mode of ["truncated", "bad-arguments", "length", "provider-error"]) {
+    streamMode = mode;
+    const stream = await claude.client.responses.create({ model: claude.model, input: "Synthetic failure", stream: true });
+    await assert.rejects(async () => { for await (const ignored of stream) void ignored; }, (e) => /No tool action was executed/.test(String(e)) && !String(e).includes("fixture-secret-commandcode"));
+  }
+  streamMode = "length";
+  await assert.rejects(() => claude.client.responses.create({ model: claude.model, input: "Truncated JSON" }), /No tool action was executed/);
+  streamMode = "normal";
+  const aborted = new AbortController(); aborted.abort();
+  await assert.rejects(() => claude.client.responses.create({ model: claude.model, input: "Cancelled" }, { signal: aborted.signal }));
+  errorResponse = () => Response.json({ error: { type: "permission_error", code: "upgrade_required", message: "Go plan does not include API access." } }, { status: 403 });
+  const oldCommand = getSetting("router_config_commandcode");
+  await assert.rejects(() => claude.client.responses.create({ model: claude.model, input: "Synthetic Go denial" }), /403.*Go plan/);
+  assert.equal(getSetting("router_config_commandcode"), oldCommand);
+  errorResponse = null; catalogMode = "normal";
   // The same HTTP status can be an API permission denial or a website/security page.
   const nara = ROUTER_PROVIDERS.find((p) => p.id === "nararouter");
   const oldNara = getSetting("router_config_nararouter"), replacement = "sk-nry-replacement-secret";
@@ -226,7 +315,7 @@ try {
   assert.equal(getSetting("default_model"), null);
   assert.equal(routers.routerSource("agentrouter"), null);
   // A restart must decrypt the saved configuration without a provider request.
-  const code = "const r=await import('./src/server/agent/routers.ts'); if(r.routerKey('tokenrouter')!=='fixture-secret-tokenrouter')throw Error('Restart lost router key'); const d=await import('./src/server/db.ts'); d.db().close();";
+  const code = "const r=await import('./src/server/agent/routers.ts'); if(r.routerKey('tokenrouter')!=='fixture-secret-tokenrouter'||r.routerKey('commandcode')!=='fixture-secret-commandcode')throw Error('Restart lost router key'); const d=await import('./src/server/db.ts'); d.db().close();";
   const restarted = spawnSync(process.execPath, ["--import", pathToFileURL(path.join(root, "scripts/windows-test-loader.mjs")).href, "--input-type=module", "-e", code], { cwd: root, env: { ...process.env }, encoding: "utf8", windowsHide: true });
   assert.equal(restarted.status, 0, restarted.stderr);
   // Losing the vault key must not mint a replacement over saved router credentials.
@@ -234,7 +323,7 @@ try {
   fs.renameSync(path.join(temp, "vault.key.dpapi"), path.join(temp, "vault.key.dpapi.saved"));
   const lost = spawnSync(process.execPath, ["--import", pathToFileURL(path.join(root, "scripts/windows-test-loader.mjs")).href, "--input-type=module", "-e", "const v=await import('./src/server/vault.ts');v.seal('fixture');"], { cwd: root, env: { ...process.env }, encoding: "utf8", windowsHide: true });
   assert.notEqual(lost.status, 0); assert.match(lost.stderr, /vault key is missing/); assert(!fs.existsSync(path.join(temp, "vault.key.dpapi")));
-  console.log("PASS: six router presets, free chat/title/review defaults, catalog truncation/outage, explicit model overrides, no billed hosted search or paid quota retries, isolated credential routing, real SDK transports, stream/tool replay, JSON review, catalog errors, private/redirect guards, secret masking, DPAPI persistence and missing-key refusal; all requests synthetic.");
+  console.log("PASS: seven router presets, Command Code Claude/chat routing, fragmented native SSE, JSON review, image/tool/approval replay, partial-stream refusal, plan errors, free defaults, isolated credentials, real SDK transports, catalog/security guards and DPAPI persistence; all requests synthetic.");
 } finally {
   globalThis.fetch = originalFetch;
   try { db().close(); } catch {}

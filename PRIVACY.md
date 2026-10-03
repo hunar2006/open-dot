@@ -16,6 +16,8 @@ Saved-login autofill requires approval and checks the exact HTTPS origin saved i
 
 When you enable a model provider, its requests can include your message, instructions, relevant memory/rules/skills, tool results, selected attachments, and browser screenshots or page content. OpenAI and OpenRouter process the requests routed to them; their policies and account settings govern retention and billing. Voice mode sends microphone audio to the configured OpenAI Realtime service when used.
 
+Selected model routers, including Command Code, receive the same relevant conversation/tool data and the credential for their configured API endpoint. Command Code requests go to its Provider API and may be forwarded to its upstream model providers under its policies and your plan settings. Each router key is stored separately and is not tried against other services. Adding a provider or loading its public model catalog does not verify authenticated inference, credit or retention behavior.
+
 Composio receives sign-in/connection data and the app actions you authorize. Connected services receive the corresponding requests. Trigger configuration is stored locally and registered with the configured Composio project when enabled. App logos and connection metadata can involve requests to Composio services.
 
 Visited websites receive ordinary browser requests, session cookies and any information entered into their pages. E2B receives files, commands, browser activity and credentials used inside its cloud computer when cloud mode is enabled. Local/Docker execution runs on this machine; it is not an encrypted vault or a restriction on arbitrary approved shell commands.

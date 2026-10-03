@@ -425,6 +425,7 @@ function RouterKey({ id }: { id: RouterId }) {
             <button className="btn-primary shrink-0" disabled={pending || !key.trim()}>{pending ? "Checking…" : "Save"}</button>
           </div>
           <p className="text-caption text-foreground/50">The key goes only to the API URL shown above. Model and tool availability depend on your provider and plan.</p>
+          {id === "commandcode" && <p className="text-caption text-foreground/50">Use your Command Code Studio API key and a plan with API access. Saving loads the public model catalog; send a chat to check your key, credits and model access.</p>}
         </form>
       )}
       {error && <p role="alert" className="mt-2 break-words text-caption text-destructive">{error}</p>}

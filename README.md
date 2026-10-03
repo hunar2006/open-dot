@@ -4,6 +4,8 @@ Windows prototype: build with `npm run desktop:build:win`. The packaged app incl
 
 The Windows changes are proposed for maintainer review. No public Windows download is provided here. Publisher signing, live-provider acceptance and licensing clarification remain outstanding; see [release status](PUBLIC-RELEASE-STATUS.md) and [data handling](PRIVACY.md). Available third-party notices are bundled under `resources/notices`.
 
+The Windows prototype also supports **Command Code** under Settings > Model routers, with separate encrypted credentials and model selection for Claude and GPT/open models. See [router setup](docs/model-routers.md); your Command Code plan needs API access, and live key/model access has not been tested.
+
 OpenAI launched Dots on September 29, personal agents that keep working in the background on their own computers, but you need ChatGPT Pro or Business Premium to use them. Open Dot is an open source version that runs on your own Mac with your own OpenAI key, or with open models like Kimi, DeepSeek and Qwen through OpenRouter.
 
 ## What your dots can do

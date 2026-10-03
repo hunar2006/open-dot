@@ -1,6 +1,6 @@
 # Model routers on Windows
 
-Open Dot stores each router's key separately in its existing encrypted Windows credential vault. Choose the service that issued your key; OpenAI, OpenRouter, TokenRouter, AgentRouter and NaraRouter keys are not interchangeable.
+Open Dot stores each router's key separately in its existing encrypted Windows credential vault. Choose the service that issued your key; OpenAI, OpenRouter, TokenRouter, AgentRouter, NaraRouter and Command Code keys are not interchangeable.
 
 1. Quit the old Open Dot from its tray menu, then launch the rebuilt Windows app.
 2. Open Settings, then Model routers. Select your provider.
@@ -22,12 +22,17 @@ OpenRouter discovery loads the full `/models` catalog and filters explicit tool 
 | TokenRouter (tokenrouter.me) | `https://tokenrouter.me/v1` | [API documentation](https://docs.tokenrouter.me/) |
 | AgentRouter | `https://co.agentrouter.org/v1` | [Official integration guide](https://co.agentrouter.org/portal/guide) |
 | NaraRouter | `https://router.bynara.id/v1` | [API documentation](https://router.bynara.id/docs) |
+| Command Code | `https://api.commandcode.ai/provider/v1` | [Provider API](https://commandcode.ai/docs/provider) |
 
 Sources were checked October 2, 2026. Several distinct services use the TokenRouter name. `tokenrouter.ai` could not be verified; it is not silently treated as one of these other domains. The API base URL can be changed to the public HTTPS endpoint specified in your own provider dashboard. Credentials are sent only to that selected endpoint, and redirects are refused.
 
 OpenRouter retains its Responses transport. The other presets use their documented Chat Completions interface, translated into the app's existing conversation/tool flow. Streaming text, function calls/results, image attachments, and structured approval-review responses are supported by the adapter. Actual model capabilities, PDF support and structured-output support depend on the chosen gateway/model. Router models use the app's own conversation history; they do not use OpenAI server-side threads. Provider-hosted OpenAI computer/web-search tools are not sent to these other gateways; the dot's existing page-reading, browser and workspace function tools remain available. Voice still needs a genuine OpenAI key.
 
 Saving verifies an accessible compatible model catalog (and OpenRouter's `/key`). Some gateways expose a public model catalog, so a successful save alone does not prove inference permission, balance or model access. The UI says Saved, and asks you to send a chat to verify that access. A catalog 401/403 is never bypassed using manual model IDs; a missing catalog endpoint can use the explicit IDs you enter.
+
+Command Code support was added October 3, 2026 using its [Provider API documentation](https://commandcode.ai/docs/provider) and a credential-free public catalog GET. Select **Command Code**, keep `https://api.commandcode.ai/provider/v1`, and save your Command Code Studio key. Choose a model under Command Code in the dot's header, or in Settings > Default model for dots set to Default. Existing explicit model selections are retained. The same key serves the CLI and API on plans with API access; the Go plan excludes API access. Requests use your plan credits, so model listing and a successful save do not verify inference permission or remaining credit.
+
+Command Code's GPT/open models use Chat Completions; Claude model IDs use Anthropic Messages on `/messages`. The native adapter supports streaming text, images, function calls/results, approval-resume history and JSON-schema rule reviews. Partial streams, invalid tool JSON and truncated responses cannot execute tools. Hosted tools are omitted, the normal 2,048-token allowance applies, and no paid fallback/retry is added. Text/images are supported; the provider rejects direct file/PDF/audio inputs, so paste document text instead. Its `typesafe/jev` decision model is excluded from the chat picker. Voice still uses OpenAI. Offline transport checks are in `test:routers`; `node scripts/check-router-picker.mjs --commandcode` verifies saving, visible model selection, persistence and actual bot/approval/tool resume against the compiled server with synthetic APIs.
 
 If Save returns 403, the app shows a shortened provider error and support reference when available, with credentials masked. A website/security response is identified separately from an API permission denial. NaraRouter documents `forbidden` as plan/model access or a suspended account; its authenticated `/models` lists the models the key can access. Check the exact displayed reason in your provider dashboard, or give its support the reference. The documented NaraRouter base URL is `https://router.bynara.id/v1`; changing providers or adding manual model IDs does not fix a denied key. A failed Save retains the previously saved configuration.
 

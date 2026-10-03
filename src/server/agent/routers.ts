@@ -6,6 +6,7 @@ import { getSetting, setSetting } from "../db";
 import { seal, unseal } from "../vault";
 import { FREE_OPENROUTER_MODEL, isFreeOpenRouterModel, modelLabel, ROUTER_PROVIDERS, routerModel, routerProvider, type RouterId, type RouterStatus } from "@/lib/model-providers";
 import { chatResponses } from "./router-chat";
+import { commandCodeResponses } from "./router-anthropic";
 
 type Config = { key: string; baseURL: string; modelIds: string[] };
 const setting = (id: string) => `router_config_${id}`;
@@ -20,7 +21,7 @@ export function routerBaseURL(value: string): string {
   if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || (url.port && url.port !== "443")) throw new Error("Use an HTTPS API base URL without credentials, query parameters, or a custom port.");
   const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
   if (!host.includes(".") || host.endsWith(".localhost") || host.endsWith(".local") || isIP(host)) throw new Error("Use your provider's public HTTPS API hostname.");
-  if (/\/(chat\/completions|responses|models|key)\/?$/.test(url.pathname)) throw new Error("Enter the base URL ending in /v1, not a full request endpoint.");
+  if (/\/(chat\/completions|responses|messages|models|key)\/?$/.test(url.pathname)) throw new Error("Enter the base URL ending in /v1, not a full request endpoint.");
   return url.href.replace(/\/+$/, "");
 }
 
@@ -117,6 +118,7 @@ async function listModels(c: Config, id: RouterId): Promise<string[]> {
   const ids = body.data.flatMap((m: unknown) => {
     if (!m || typeof m !== "object" || !("id" in m) || typeof m.id !== "string" || !m.id.trim() || m.id.includes(c.key) || /embedding|tts|transcrib|whisper|realtime|dall-e|moderation|image-generation/i.test(m.id)) return [];
     if (id === "openrouter" && "supported_parameters" in m && (!Array.isArray(m.supported_parameters) || !m.supported_parameters.includes("tools"))) return [];
+    if (id === "commandcode" && (m.id === "typesafe/jev" || ("supported_endpoints" in m && (!Array.isArray(m.supported_endpoints) || !m.supported_endpoints.some((e) => e === "/chat/completions" || e === "/messages"))))) return [];
     return [m.id];
   });
   const selected = c.modelIds.length ? c.modelIds : ids;
@@ -188,7 +190,7 @@ export function routerClient(appModel: string): { client: OpenAI; model: string 
   if (cached?.signature !== signature) {
     const client = new OpenAI({ apiKey: c.key, baseURL: c.baseURL, fetch: (input, init) => routerFetch(c, input, init), maxRetries: 0, timeout: 120_000,
       defaultHeaders: route.provider.id === "openrouter" ? { "HTTP-Referer": "https://github.com/composio-community/open-dot", "X-OpenRouter-Title": "Open Dot" } : undefined });
-    const routed = route.provider.responses ? client : chatResponses(client);
+    const routed = route.provider.id === "commandcode" ? commandCodeResponses(client) : route.provider.responses ? client : chatResponses(client);
     const create = routed.responses.create.bind(routed.responses);
     // Unset limits can reserve a model's entire output window against a small balance.
     routed.responses.create = ((params, options) => create({

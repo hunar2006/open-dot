@@ -42,7 +42,7 @@ export function chatRequest(params: ResponseCreateParams): ChatCompletionCreateP
     ...(params.max_output_tokens ? { max_tokens: params.max_output_tokens } : {}), stream: false };
 }
 
-function response(id: string, model: string, text: string, calls: { id: string; name: string; arguments: string }[], messageId: string): Response {
+export function response(id: string, model: string, text: string, calls: { id: string; name: string; arguments: string }[], messageId: string): Response {
   const output: ResponseOutputItem[] = [];
   if (text) output.push({ id: messageId, type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [], logprobs: [] }] });
   for (const call of calls) {

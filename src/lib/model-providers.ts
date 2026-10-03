@@ -6,6 +6,7 @@ export const ROUTER_PROVIDERS = [
   { id: "tokenrouter-me", name: "TokenRouter (tokenrouter.me)", baseURL: "https://tokenrouter.me/v1", env: "TOKENROUTER_ME_API_KEY", docs: "https://docs.tokenrouter.me/", responses: false },
   { id: "agentrouter", name: "AgentRouter", baseURL: "https://co.agentrouter.org/v1", env: "AGENTROUTER_API_KEY", docs: "https://co.agentrouter.org/portal/guide", responses: false },
   { id: "nararouter", name: "NaraRouter", baseURL: "https://router.bynara.id/v1", env: "NARAROUTER_API_KEY", docs: "https://router.bynara.id/docs", responses: false },
+  { id: "commandcode", name: "Command Code", baseURL: "https://api.commandcode.ai/provider/v1", env: "CMD_API_KEY", docs: "https://commandcode.ai/docs/provider", responses: false },
 ] as const;
 
 export type RouterId = (typeof ROUTER_PROVIDERS)[number]["id"];
