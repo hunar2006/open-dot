@@ -303,11 +303,13 @@ async function respond(dot: Dot, prevId: string | null, input: ResponseInputItem
   if (!stateless && COMPUTER_ENABLED && supportsComputerTool(model)) tools.push({ type: "computer" } as Tool);
 
   // Stateless providers get the whole conversation every time; the app keeps it (trimmed) per chat.
-  const history = stateless ? (repo.getHistory(dot.id) as ResponseInputItem[]) : [];
+  const history = stateless ? trimHistory(completeToolHistory([...(repo.getHistory(dot.id) as ResponseInputItem[]), ...input])) : [];
+  // Persist completed tool results before a network failure or cancellation can lose them.
+  if (stateless) repo.setHistory(dot.id, history);
   repo.setActivity(dot.id, "Thinking");
   const stream = await client.responses.create(
     stateless
-      ? { model, instructions: systemPrompt(dot, trigger), input: [...history, ...input], tools, parallel_tool_calls: false, store: false, stream: true }
+      ? { model, instructions: systemPrompt(dot, trigger), input: history, tools, parallel_tool_calls: false, store: false, stream: true }
       : {
           model,
           instructions: systemPrompt(dot, trigger),
@@ -366,7 +368,7 @@ async function respond(dot: Dot, prevId: string | null, input: ResponseInputItem
     for (const d of drafts.values()) repo.updateMessage(d.id, { text: d.text || "…" });
   }
   if (!final) throw new Error("The model stream ended unexpectedly");
-  if (stateless) repo.setHistory(dot.id, trimHistory([...history, ...input, ...replayable(final.output)]));
+  if (stateless) repo.setHistory(dot.id, trimHistory([...history, ...replayable(final.output)]));
   return final;
 }
 
@@ -382,6 +384,43 @@ function replayable(output: Response["output"]): ResponseInputItem[] {
     }
   }
   return items;
+}
+
+/** Repair interrupted/legacy tool turns without rerunning actions or claiming they succeeded. */
+function completeToolHistory(items: ResponseInputItem[]): ResponseInputItem[] {
+  const paired = new Map<ResponseInputItem, ResponseInputItem>();
+  const byId = new Map<string, ResponseInputItem>();
+  // Pair before reordering: a legacy result may have been saved after a new user message.
+  // Walking backwards also keeps repeated call IDs in separate tool turns independent.
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i];
+    if (item.type === "function_call_output" && item.call_id) byId.set(item.call_id, item);
+    else if (item.type === "function_call") {
+      const output = byId.get(item.call_id);
+      if (output) paired.set(item, output);
+      byId.delete(item.call_id);
+    }
+  }
+  const result: ResponseInputItem[] = [];
+  const calls: ResponseInputItem[] = [];
+  const flush = () => {
+    result.push(...calls);
+    for (const call of calls) if (call.type === "function_call") result.push(paired.get(call) ?? {
+      type: "function_call_output", call_id: call.call_id,
+      output: "No result was recorded for this interrupted tool call. It may have started; check its state before retrying.",
+    });
+    calls.length = 0;
+  };
+  for (const item of items) {
+    if (item.type === "function_call") calls.push(item);
+    else {
+      flush();
+      // Results were placed immediately after their calls; omit duplicates and orphan results.
+      if (item.type !== "function_call_output") result.push(item);
+    }
+  }
+  flush();
+  return result;
 }
 
 /** Keep the replayed history bounded: drop the oldest turns, always cutting at a user message. */
@@ -520,7 +559,7 @@ function closePending(dot: Dot, pending: Pending): ResponseInputItem[] | null {
   for (let i = pending.index; i < pending.calls.length; i++) {
     const call = pending.calls[i];
     if (call.type === "computer_call") return null;
-    outputs.push({ type: "function_call_output", call_id: call.call_id, output: "Not run — the user sent a new message first." });
+    outputs.push({ type: "function_call_output", call_id: call.call_id, output: "Interrupted by a new message before a result was recorded. Execution may have started; check its state before retrying." });
   }
   repo.setThread(dot.id, pending.responseId, null);
   return outputs;

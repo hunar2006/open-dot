@@ -19,6 +19,7 @@
     "test:approvals": "node scripts/check-approvals.mjs",
     "test:logins:win": "node scripts/check-login-security.mjs",
     "test:routers": "node scripts/check-routers.mjs",
+    "test:tool-history": "node scripts/check-tool-history.mjs",
     "test:installer:win": "node scripts/check-install-windows.mjs"
   },
   "dependencies": {

@@ -28,6 +28,8 @@ Local commands use Windows PowerShell and ask for approval by default. A dot's l
 
 ## Data and recovery
 
+If an older chat reports HTTP 400 about missing `tool_calls` results, quit the old app from its tray menu, open the updated executable, and send a new message such as “Continue.” The updated app repairs incomplete router history on the next request while preserving the chat and any recorded results. Missing results are marked as interrupted with an unknown execution outcome; recovery does not execute the old actions again. Ask the bot to check their state before retrying anything that changes data.
+
 Normal app data is stored beneath `%APPDATA%\Open Dot` (`data` and `server.log`). The ZIP makes the program portable; its saved credentials are bound to your Windows user through DPAPI. Copying the app or data to a different user or machine does not guarantee credential recovery. Keep the complete data folder and a recoverable Windows-user/profile backup. On another account, start with a fresh app profile and re-enter credentials through Settings; this delivery has no cross-account credential export/rekey tool. Never delete or replace a vault key to repair an existing vault.
 
 Existing valid plaintext Windows `vault.key` files migrate to DPAPI only after successful verification. Corrupt, conflicting or missing keys with existing encrypted records cause an error and retain data instead of generating a replacement. Credentials remain AES-256-GCM encrypted in SQLite; chats, workspaces and browser profiles are not all encrypted by this vault.
@@ -50,6 +52,7 @@ npm run test:userflows:win
 npm run test:approvals
 npm run test:logins:win
 npm run test:routers
+npm run test:tool-history
 ```
 
 The build downloads the pinned Chromium revision and produces ZIP and NSIS targets in `dist`. It recreates the tray icon and bundles the standalone server/dependencies. For development, run `npm run dev`, then `npm run desktop:dev` in another terminal. `OPEN_DOT_DEV_URL` can select another loopback dev URL. Synthetic acceptance profiles are isolated; no credentials are included in this delivery.

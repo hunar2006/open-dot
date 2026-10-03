@@ -5,16 +5,34 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { chromium } from "playwright";
+import { DatabaseSync } from "node:sqlite";
 await import("./windows-test-loader.mjs");
 const { ROUTER_PROVIDERS } = await import("../src/lib/model-providers.ts");
 const root = path.resolve(import.meta.dirname, "..");
 const commandCode = process.argv.includes("--commandcode");
+const brokenHistory = process.argv.includes("--broken-history");
 const arg = (name, fallback) => process.argv.includes(name) ? process.argv[process.argv.indexOf(name) + 1] : fallback;
 const serverDir = path.resolve(arg("--server", path.join(root, ".desktop/server")));
 const browserExe = arg("--browser", path.join(root, ".desktop/browser/chromium-1243/chrome-win64/chrome.exe"));
 const profile = fs.mkdtempSync(path.join(root, ".windows-check-router-picker-"));
 const fixture = path.join(profile, "catalog.mjs"), requestLog = path.join(profile, "requests.jsonl");
 fs.writeFileSync(fixture, `import fs from "node:fs";
+import assert from "node:assert/strict";
+function validTools(messages) {
+  const waiting = new Set();
+  for (const m of messages) {
+    if (m.role === "tool") { assert(waiting.delete(m.tool_call_id), "Unexpected tool result"); continue; }
+    const results = Array.isArray(m.content) ? m.content.filter(b=>b.type==="tool_result") : [];
+    if (results.length) {
+      assert(m.content.slice(0,results.length).every(b=>b.type==="tool_result"));
+      for (const b of results) assert(waiting.delete(b.tool_use_id), "Unexpected Claude tool result");
+    }
+    assert.equal(waiting.size,0,"insufficient tool messages following tool_calls message");
+    for (const c of m.tool_calls ?? []) waiting.add(c.id);
+    for (const b of Array.isArray(m.content) ? m.content : []) if (b.type==="tool_use") waiting.add(b.id);
+  }
+  assert.equal(waiting.size,0,"insufficient tool messages following tool_calls message");
+}
 globalThis.fetch = async (input, init = {}) => {
   const url = new URL(input instanceof Request ? input.url : String(input));
   const method = init.method ?? (input instanceof Request ? input.method : "GET");
@@ -22,6 +40,8 @@ globalThis.fetch = async (input, init = {}) => {
   if (${commandCode} && url.origin === "https://api.commandcode.ai" && url.pathname.startsWith("/provider/v1/")) {
     if (method === "GET" && url.pathname.endsWith("/models")) return Response.json({data:[{id:"deepseek/fixture-flash",supported_endpoints:["/chat/completions"]},{id:"claude-fixture",supported_endpoints:["/messages"]},{id:"typesafe/jev",supported_endpoints:["/systemone"]}]});
     const body = JSON.parse(init.body);
+    try { validTools(body.messages); }
+    catch(err) { return Response.json({error:{message:err.message}},{status:400}); }
     if (method === "POST" && url.pathname.endsWith("/chat/completions")) {
       const text = body.response_format ? '{"applying_rules":[]}' : body.stream ? "Chat Completion route completed the offline demo." : "Command Code demo";
       const c = {id:"chat_cmd",model:body.model,choices:[{index:0,message:{role:"assistant",content:text},finish_reason:"stop"}]};
@@ -29,7 +49,8 @@ globalThis.fetch = async (input, init = {}) => {
       return new Response('data: '+JSON.stringify({id:c.id,model:body.model,choices:[{index:0,delta:{content:text},finish_reason:"stop"}]})+'\\n\\ndata: [DONE]\\n\\n',{headers:{"Content-Type":"text/event-stream"}});
     }
     if (method === "POST" && url.pathname.endsWith("/messages") && body.stream) {
-      const resumed = body.messages.some(m=>m.content.some(b=>b.type==="tool_result"));
+      if (${brokenHistory}) assert(body.messages.some(m=>m.content.some(b=>b.type==="tool_result"&&b.tool_use_id==="call_legacy"&&b.content.includes("may have started"))), "Broken legacy history was not repaired");
+      const resumed = body.messages.some(m=>m.content.some(b=>b.type==="tool_result"&&b.tool_use_id==="call_demo"));
       const block = resumed ? {type:"text",text:""} : {type:"tool_use",id:"call_demo",name:"run_command",input:{}};
       const delta = resumed ? {type:"text_delta",text:"Command Code completed the offline demo."} : {type:"input_json_delta",partial_json:JSON.stringify({command:"Write-Output 'command-code-fixture'"})};
       const events=[{type:"message_start",message:{id:"msg_demo",model:body.model,content:[],stop_reason:null}},{type:"content_block_start",index:0,content_block:block},{type:"content_block_delta",index:0,delta},{type:"content_block_stop",index:0},{type:"message_delta",delta:{stop_reason:resumed?"end_turn":"tool_use"}},{type:"message_stop"}];
@@ -83,6 +104,16 @@ try {
     await page.getByRole("button", { name: "Create Command Code check", exact: true }).click();
     await page.waitForURL(/\/dots\/dot_/);
     await picker.filter({ hasText: /Default.*claude-fixture/ }).waitFor();
+    if (brokenHistory) {
+      const data = new DatabaseSync(path.join(profile, "data/dots.db"));
+      try {
+        const dotId = new URL(page.url()).pathname.split("/").pop();
+        data.prepare("UPDATE conversations SET history = ? WHERE dot_id = ?").run(JSON.stringify([
+          { role: "user", content: "An older interrupted request" },
+          { type: "function_call", call_id: "call_legacy", name: "remember", arguments: '{"fact":"Must not execute this interrupted action"}' },
+        ]), dotId);
+      } finally { data.close(); }
+    }
     const composer = page.getByPlaceholder("Message Command Code check…", { exact: true });
     await composer.fill("Run the harmless offline demo command.");
     await page.getByRole("button", { name: "Send", exact: true }).click();
@@ -94,11 +125,16 @@ try {
     await composer.fill("Check the other Command Code protocol.");
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await page.getByText("Chat Completion route completed the offline demo.", { exact: true }).waitFor({ timeout: 30000 });
+    if (brokenHistory) {
+      const data = new DatabaseSync(path.join(profile, "data/dots.db"));
+      try { assert.equal(data.prepare("SELECT COUNT(*) n FROM memories").get().n, 0, "Recovery must not execute the legacy action"); }
+      finally { data.close(); }
+    }
     const requests = fs.readFileSync(requestLog, "utf8").trim().split("\n").map(line => JSON.parse(line));
     assert(requests.every(r => new URL(r.url).origin === "https://api.commandcode.ai"));
     assert(requests.some(r => r.method === "POST" && new URL(r.url).pathname.endsWith("/messages")));
     assert(requests.some(r => r.method === "POST" && new URL(r.url).pathname.endsWith("/chat/completions")));
-    console.log("PASS: compiled-server Command Code save, catalog filtering, encrypted profile, Settings/dot pickers, selection persistence, real bot/tool approval and resumed Claude/chat protocol switching; synthetic APIs only");
+    console.log("PASS: compiled-server Command Code save, catalog filtering, encrypted profile, Settings/dot pickers, selection persistence, real bot/tool approval and resumed Claude/chat protocol switching" + (brokenHistory ? ", strict provider accepted repaired legacy history without rerunning its action" : "") + "; synthetic APIs only");
   } else {
   await picker.filter({ hasText: "openrouter/free" }).waitFor();
   await picker.click();
