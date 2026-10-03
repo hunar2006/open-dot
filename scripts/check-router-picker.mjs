@@ -12,6 +12,8 @@ const root = path.resolve(import.meta.dirname, "..");
 const commandCode = process.argv.includes("--commandcode");
 const brokenHistory = process.argv.includes("--broken-history");
 const arg = (name, fallback) => process.argv.includes(name) ? process.argv[process.argv.indexOf(name) + 1] : fallback;
+const reloads = Number(arg("--reloads", "0"));
+assert(Number.isInteger(reloads) && reloads >= 0 && reloads <= 30, "Reload count must be between 0 and 30");
 const serverDir = path.resolve(arg("--server", path.join(root, ".desktop/server")));
 const browserExe = arg("--browser", path.join(root, ".desktop/browser/chromium-1243/chrome-win64/chrome.exe"));
 const profile = fs.mkdtempSync(path.join(root, ".windows-check-router-picker-"));
@@ -81,6 +83,8 @@ try {
   }
   browser = await chromium.launch({ executablePath: browserExe, headless: true });
   const page = await browser.newPage({ viewport: { width: 1300, height: 860 } });
+  const pageErrors = [];
+  page.on("pageerror", err => pageErrors.push(`${page.url()}\n${err.stack ?? err.message}`));
   await page.goto("http://localhost:3105/settings");
   const picker = page.locator('button[aria-haspopup="listbox"]');
   const evidence = path.join(root, ".windows-check-output/evidence");
@@ -164,6 +168,18 @@ try {
   assert(requests.length > 0 && requests.every(r => r.method === "GET" && new URL(r.url).pathname === "/api/v1/models" && !new URL(r.url).searchParams.has("supported_parameters")));
   console.log("PASS: compiled-server free default, visible Settings/dot dropdowns, paid-to-free selection, reload persistence and dot inheritance; synthetic catalogs only, no inference");
   }
+  const dotUrl = page.url();
+  for (let i = 0; i < reloads; i++) {
+    await page.setViewportSize({ width: i % 2 ? 1300 : 390, height: 860 });
+    await page.goto("http://localhost:3105/settings");
+    await page.locator('[aria-label="Open menu"]').waitFor({ state: "attached" });
+    assert.equal(await page.locator('[aria-label="Open menu"]').count(), 1);
+    await page.goto(dotUrl);
+    await page.getByRole("button", { name: "Pause", exact: true }).waitFor();
+    assert.equal(await page.locator('[aria-label="Open menu"]').count(), 1, "Dot pages must not duplicate the mobile header");
+  }
+  assert.equal(pageErrors.length, 0, pageErrors.join("\n"));
+  if (reloads) console.log(`PASS: ${reloads} Settings/dot hard-navigation round trips at mobile/desktop widths, correct menu count and no hydration/page errors`);
 } catch (err) { throw new Error(`${err.message}\n${output}`, { cause: err }); }
 finally {
   await browser?.close();
