@@ -121,16 +121,30 @@ try {
   assert.equal((await run(dot, [tool("request_approval", { action: "Read fixture data", details: "Offline" }), tool("run_command", { command: safeCommand })])).length, 0);
   assert.equal(globalThis.reviewCount, count);
   assert(globalThis.runtimePrompts.at(-1).includes("Approval mode: Auto approve"));
-  // Ask/Never rules and built-in refusal always retain precedence over Auto approve.
+  // Reproduce the existing-profile bug: old Allow/Ask rules + failed reviewer prompted on every command in Auto mode.
+  const legacyAllow = Array.from({ length: 15 }, (_, i) => repo.addRule({ dotId: dot.id, action: `legacy allowed action ${i}`, decision: "allow" }));
   const ask = repo.addRule({ dotId: dot.id, action: "run commands", decision: "ask" });
-  globalThis.reviewFixture = '{"applying_rules":[1]}';
-  assert.equal((await review(dot.id, "run commands", "ask")).decision, "ask");
-  repo.deleteRule(ask.id);
+  assert.equal((await review(dot.id, "read workspace JSON", "ask")).decision, "allow", "Auto approve must not depend on reviewing saved Ask/Allow rules");
+  assert.equal((await run(dot, [tool("request_approval", { action: "Read workspace JSON", details: "Offline fixture" }), tool("run_command", { command: safeCommand }), tool("run_command", { command: "Get-Content approved.txt" })])).length, 0);
+  assert.equal(globalThis.reviewCount, count, "An unavailable reviewer must not restore approval prompts in Auto mode");
+  assert(!globalThis.runtimePrompts.at(-1).includes("When you want to run commands: ask first"));
+  // Stored Ask rules are retained and apply again when Auto mode is disabled.
+  repo.updateDot(dot.id, { approvalMode: "ask" });
+  const askIndex = repo.rulesFor(dot.id).findIndex(r => r.id === ask.id) + 1;
+  globalThis.reviewFixture = JSON.stringify({ applying_rules: [askIndex] });
+  assert.equal((await review(dot.id, "run commands", "allow")).decision, "ask");
+  repo.updateDot(dot.id, { approvalMode: "auto" });
+  for (const rule of legacyAllow) repo.deleteRule(rule.id);
+  // Never rules and built-in refusal always retain precedence over Auto approve.
   const deny = repo.addRule({ dotId: null, action: "run commands", decision: "never" });
+  globalThis.reviewFixture = new Error("Reviewer unavailable for Never rule");
+  assert.equal((await review(dot.id, "run commands", "ask")).decision, "never");
+  globalThis.reviewFixture = '{"applying_rules":[1]}';
   assert.equal((await run(dot, [tool("run_command", { command: "'never' | Set-Content never.txt" })])).length, 0);
   assert(!fs.existsSync(path.join(workspaceDir(dot.id), "never.txt")));
   assert.equal((await review(dot.id, "anything", "never")).decision, "never");
   repo.deleteRule(deny.id);
+  repo.deleteRule(ask.id);
   const questions = await run(dot, [tool("ask_user", { question: "Missing information", options: [] })]);
   assert.equal(questions[0].card.kind, "question");
   await runtime.resolveCard(questions[0].id, "answer", "Fixture answer");
@@ -145,7 +159,7 @@ try {
   const strict = await run(dot, [tool("run_command", { command: safeCommand })]);
   assert.equal(strict.length, 1, "Switching back restores ordinary approval prompts");
   runtime.stop(dot.id);
-  console.log("PASS: actual rule gate and runtime, three persisted per-bot approval modes, full-command risk review, automatic command execution, explicit approval tools, denial/conflict precedence, malformed/outage fallback, question/safety/local-access checks; synthetic providers only");
+  console.log("PASS: actual rule gate and runtime, persisted per-bot modes, automatic commands/approval tools, legacy Ask/Allow rules retained without reviewer calls in Auto, restored Ask rules outside Auto, Never refusal on reviewer failure, question/safety/local-access checks; synthetic providers only");
 } finally {
   db().close();
   if (path.dirname(temp) !== root || fs.lstatSync(temp).isSymbolicLink()) throw new Error("Unexpected approval cleanup target");

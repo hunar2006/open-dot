@@ -76,7 +76,7 @@ export function ApprovalModeSelect({ dot, compact = false }: { dot: Dot; compact
       </label>
       {!compact && <p className="text-caption text-foreground/55">
         {dot.approvalMode === "auto"
-          ? "Commands and actions run without ordinary approval prompts, including changes on your PC and in connected apps. Your Ask first/Never allow rules and built-in safety checks still apply."
+          ? "Commands and actions run without ordinary approval prompts, including changes on your PC and in connected apps. This overrides Ask first rules. Never allow rules and built-in safety checks still apply."
           : dot.approvalMode === "balanced"
           ? "Routine work runs automatically after your bot's model checks it. Risky or uncertain actions still ask; if the check fails, it asks too."
           : "Local commands and sensitive actions ask first. Reading workspace files and routine browser navigation still run automatically."}
@@ -89,6 +89,7 @@ export function ApprovalModeSelect({ dot, compact = false }: { dot: Dot; compact
 
 export function RuleEditor({ dotId, name }: { dotId: string | null; name: string }) {
   const all = useStore((s) => s.rules);
+  const auto = useStore((s) => s.dots.find(d => d.id === dotId)?.approvalMode === "auto");
   const rules = useMemo(() => all.filter((r) => r.dotId === dotId), [all, dotId]);
   const [action, setAction] = useState("");
   const [decision, setDecision] = useState<RuleDecision>("ask");
@@ -105,7 +106,9 @@ export function RuleEditor({ dotId, name }: { dotId: string | null; name: string
                 <span className="min-w-0 flex-1 text-body-sm text-foreground/60">
                   When {name} wants to <span className="text-foreground">{r.action}</span>
                 </span>
-                <span className={`shrink-0 rounded-xs px-1.5 py-0.5 font-mono text-[10px] tracking-wider uppercase ${d.tone}`}>{d.label}</span>
+                <span className={`shrink-0 rounded-xs px-1.5 py-0.5 font-mono text-[10px] tracking-wider uppercase ${auto && r.decision === "ask" ? "bg-black/5 text-foreground/45" : d.tone}`}>
+                  {auto && r.decision === "ask" ? "Inactive in Auto approve" : d.label}
+                </span>
                 <RemoveButton label="Delete rule" onClick={() => start(() => actions.deleteRule(r.id))} />
               </div>
             );
@@ -144,7 +147,7 @@ export function RuleEditor({ dotId, name }: { dotId: string | null; name: string
           </div>
         </div>
       </form>
-      <p className="text-caption text-foreground/45">One short, natural-language rule per action. If rules conflict, &ldquo;Never allow&rdquo; wins, then &ldquo;Ask first&rdquo;. Built-in safety checks always apply.</p>
+      <p className="text-caption text-foreground/45">One short, natural-language rule per action. &ldquo;Never allow&rdquo; always wins. Auto approve overrides &ldquo;Ask first&rdquo; rules; those rules apply again in the other modes. Built-in safety checks always apply.</p>
     </div>
   );
 }

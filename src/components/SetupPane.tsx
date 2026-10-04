@@ -81,7 +81,7 @@ export default function SetupPane({ dot }: { dot: Dot }) {
           </div>
         </Section>
 
-        <Section id="approvals" eyebrow="Approvals" title="Approval mode & rules" description={`Choose when ${dot.name} should ask. Custom rules take priority over its approval mode.`}>
+        <Section id="approvals" eyebrow="Approvals" title="Approval mode & rules" description={`Choose when ${dot.name} should ask. Never allow rules always apply; Auto approve overrides Ask first rules.`}>
           <ApprovalModeSelect dot={dot} />
           <RuleEditor dotId={dot.id} name={dot.name} />
         </Section>

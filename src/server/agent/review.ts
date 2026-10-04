@@ -14,7 +14,8 @@ export async function review(dotId: string, action: string, fallback: RuleDecisi
   const dot = repo.getDot(dotId);
   const assessRisk = dot?.approvalMode === "balanced" && fallback === "ask";
   if (dot?.approvalMode === "auto") fallback = "allow";
-  const rules = repo.rulesFor(dotId);
+  // Auto is an explicit override of Ask/Allow rules. Only Never rules can restrict it.
+  const rules = repo.rulesFor(dotId).filter(r => dot?.approvalMode !== "auto" || r.decision === "never");
   if (!rules.length && !assessRisk) return { decision: fallback, rule: null };
 
   const list = rules.map((r, i) => `${i + 1}. When the dot wants to ${r.action} → ${r.decision === "allow" ? "allow automatically" : r.decision === "ask" ? "ask first" : "never allow"}`).join("\n");

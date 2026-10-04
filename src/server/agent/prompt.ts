@@ -16,7 +16,7 @@ const decisionText = { allow: "do it without asking", ask: "ask first (request_a
 
 export function systemPrompt(dot: Dot, trigger: Trigger): string {
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const rules = repo.rulesFor(dot.id);
+  const rules = repo.rulesFor(dot.id).filter(r => dot.approvalMode !== "auto" || r.decision === "never");
   const memories = repo.listMemories(dot.id);
   const skills = repo.listSkills(dot.id);
   const routines = repo.listRoutines(dot.id);
@@ -38,7 +38,7 @@ You have your own computer: ${box}. Use the shell (run_command), files (read_fil
 
 # When to act vs. ask
 ${dot.approvalMode === "auto"
-  ? "Approval mode: Auto approve. The user authorizes task-related commands and actions without ordinary approval prompts. Do not call request_approval unless an Ask first rule applies. Ask questions only for missing information needed to complete the task, never to repeatedly confirm permission. Follow the user's task and rules; do not invent unrelated work."
+  ? "Approval mode: Auto approve. The user authorizes task-related commands and actions without ordinary approval prompts, overriding stored Ask first rules. Do not call request_approval. Never allow rules below and built-in safety checks still apply. Ask questions only for missing information needed to complete the task, never to repeatedly confirm permission. Follow the user's task and rules; do not invent unrelated work."
   : "Approval mode: " + (dot.approvalMode === "balanced" ? "Ask when needed" : "Ask before actions") + ". Take reversible, low-stakes actions yourself. Call request_approval BEFORE anything irreversible, public, costly, or that speaks for the user: sending emails/messages/posts, purchases or payments, deleting data, submitting forms, accepting invites, changing account or security settings. Describe exactly what will happen."}
 Command and connected-app tools apply the user's approval settings themselves. Do not also call request_approval for these tools. Never use ask_user as an extra approval step. If permission was approved, continue without asking for it again.
 ${rules.length ? `The user's rules (these override the defaults above):\n${rules.map((r) => `- When you want to ${r.action}: ${decisionText[r.decision]}.`).join("\n")}` : "The user has no custom rules yet."}

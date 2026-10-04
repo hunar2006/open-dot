@@ -40,13 +40,14 @@ function validTools(messages) {
 globalThis.fetch = async (input, init = {}) => {
   const url = new URL(input instanceof Request ? input.url : String(input));
   const method = init.method ?? (input instanceof Request ? input.method : "GET");
-  fs.appendFileSync(${JSON.stringify(requestLog)}, JSON.stringify({url:url.href,method}) + "\\n");
+  fs.appendFileSync(${JSON.stringify(requestLog)}, JSON.stringify({url:url.href,method,legacyRuleReview:!!init.body && String(init.body).includes("legacy-ask-rule-fixture")}) + "\\n");
   if (${commandCode} && url.origin === "https://api.commandcode.ai" && url.pathname.startsWith("/provider/v1/")) {
     if (method === "GET" && url.pathname.endsWith("/models")) return Response.json({data:[{id:"deepseek/fixture-flash",supported_endpoints:["/chat/completions"]},{id:"claude-fixture",supported_endpoints:["/messages"]},{id:"typesafe/jev",supported_endpoints:["/systemone"]}]});
     const body = JSON.parse(init.body);
     try { validTools(body.messages); }
     catch(err) { return Response.json({error:{message:err.message}},{status:400}); }
     if (method === "POST" && url.pathname.endsWith("/chat/completions")) {
+      if (body.response_format && String(init.body).includes("legacy-ask-rule-fixture")) return Response.json({error:{message:"Synthetic existing-rule reviewer outage"}},{status:400});
       const content = body.messages.findLast(m=>m.role==="user")?.content;
       const userText = typeof content === "string" ? content : (content ?? []).map(b=>b.text ?? "").join("");
       const mode = ${approvalModes} ? /^Approval mode (auto|balanced|ask|risky)$/.exec(userText)?.[1] : null;
@@ -162,6 +163,13 @@ try {
       await page.locator("#approvals").waitFor();
       await page.goto(base); await page.getByRole("button",{name:"Approve",exact:true}).click();
       await page.getByText("risky mode finished.",{exact:true}).waitFor({timeout:30000});
+      // Existing user profiles already contain Allow/Ask rules. An unavailable reviewer must not prompt in Auto mode.
+      const legacyRules = new DatabaseSync(path.join(profile,"data/dots.db"));
+      try {
+        const insert = legacyRules.prepare("INSERT INTO rules (id,dot_id,action,decision,created_at) VALUES (?,?,?,?,?)");
+        for (let i=0;i<15;i++) insert.run("legacy_allow_"+i,dotId,"legacy allowed action "+i,"allow",Date.now());
+        insert.run("legacy_ask",dotId,"legacy-ask-rule-fixture: spend money or send external messages","ask",Date.now());
+      } finally { legacyRules.close(); }
       const headerMode = page.getByLabel("Approval mode",{exact:true});
       await headerMode.selectOption("auto");
       await page.waitForFunction(() => [...document.querySelectorAll('select[aria-label="Approval mode"]')].some(s=>!s.disabled&&s.value==="auto"));
@@ -171,6 +179,12 @@ try {
       assert.equal(await page.getByRole("button",{name:"Approve",exact:true}).count(),0);
       for (const mode of ["auto","balanced"]) assert.equal(fs.readFileSync(path.join(profile,"data/dots",dotId,"workspace/mode_"+mode+".txt"),"utf8").trim().split(/\r?\n/).length,2,"Each command must execute exactly once");
       await page.setViewportSize({width:390,height:860}); await page.goto(base+"?tab=setup#approvals");
+      await page.getByText("Inactive in Auto approve",{exact:true}).waitFor();
+      const legacyRequests = fs.readFileSync(requestLog,"utf8").trim().split("\n").map(line=>JSON.parse(line));
+      assert(!legacyRequests.some(r=>r.legacyRuleReview),"Auto mode must not send old Ask/Allow rules to an unavailable reviewer");
+      const persistedRules = new DatabaseSync(path.join(profile,"data/dots.db"));
+      try { assert.equal(persistedRules.prepare("SELECT COUNT(*) n FROM rules WHERE dot_id=?").get(dotId).n,16,"Mode changes must retain existing rules"); }
+      finally { persistedRules.close(); }
       await setupMode.selectOption("ask");
       await page.waitForFunction(() => [...document.querySelectorAll('#approvals select')].some(s=>!s.disabled&&s.value==="ask"));
       await page.goto(base); await composer.fill("Approval mode ask"); await page.getByRole("button",{name:"Send",exact:true}).click();
@@ -179,7 +193,7 @@ try {
       await page.getByRole("button",{name:"Approve",exact:true}).click();
       await page.getByText("ask mode finished.",{exact:true}).waitFor({timeout:30000});
       await page.setViewportSize({width:1300,height:860});
-      console.log("PASS: packaged UI approval modes, Setup/header saves and reload persistence, repeated balanced/auto commands execute once without approval, risk/ask cards wait for approval, mobile controls and approval-settings link; synthetic provider only");
+      console.log("PASS: packaged UI approval modes, Setup/header saves and reload persistence, repeated balanced/auto commands execute once without approval, old Ask/Allow rules retained without reviewer calls in Auto, risk/ask cards wait for approval, mobile controls and approval-settings link; synthetic provider only");
     }
     if (brokenHistory) {
       const data = new DatabaseSync(path.join(profile, "data/dots.db"));
