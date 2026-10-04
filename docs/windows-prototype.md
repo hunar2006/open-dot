@@ -27,10 +27,13 @@ For development, run `npm run dev`, then `npm run desktop:dev` in another termin
 - CurrentUser DPAPI protects the AES-256-GCM vault key. Valid legacy Windows keys migrate after verification; missing/corrupt/conflicting keys retain existing data.
 - Workspace traversal/junction/alternate-stream checks, browser-origin guards for API mutations and Server Actions, and exact saved HTTPS-origin autofill.
 - Retryable locked-file deletion, channel lead deselection, conservative approval-review failure handling and platform-aware UI descriptions.
+- Per-dot approval modes in Setup and the desktop chat header: preserve existing asking behavior, review routine actions with the bot's selected model, or auto approve ordinary actions. Modes persist across chats/routines/restarts; custom Ask/Never rules, actual questions, OAuth and built-in computer safety checks retain precedence.
 - Available dependency/font notices, pinned supplemental notice hashes and credits from the exact bundled Chromium.
 - Separate encrypted OpenRouter, TokenRouter, AgentRouter and NaraRouter connections, provider-specific model groups and Chat Completions transport for the additional gateways. See [model router setup and protocol limits](model-routers.md).
 
 ## Validation and reproduction
+
+For the October 4 approval-mode update, `npm run test:approvals` exercises the actual runtime and SQLite with synthetic provider responses: all three modes, repeated real harmless PowerShell commands, interrupted/pending approvals, rule precedence, malformed/unavailable reviews, personal-computer access revocation, and computer safety checks. `node scripts/check-router-picker.mjs --commandcode --broken-history --approval-modes --reloads 15` tests the compiled server and browser controls using synthetic APIs, including mode saves/reloads, automatic commands, risky/strict approval cards, mobile controls and existing tool-history repair. This verifies the implementation and transports, rather than the judgment quality of a live model. The selected model evaluates risk in balanced mode; there is no OS sandbox around local commands.
 
 The implementation and packaged candidate were tested locally on September 30 and October 1, 2026, on Windows 11 x64. These are scoped local results, not CI results or a claim of complete product readiness. The October 1 repack changed notices/documents; all 10,224 other runtime files matched the preceding accepted candidate by SHA256.
 

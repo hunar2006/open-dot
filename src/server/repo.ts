@@ -3,6 +3,7 @@ import { db, getSetting, id, setSetting } from "./db";
 import { emit } from "./bus";
 import { Cron } from "croner";
 import { normalizeLook } from "@/lib/look";
+import { APPROVAL_MODES } from "@/lib/types";
 import type {
   AppTrigger, Attachment, CardData, Channel, Conversation, Dot, DotStatus, Look, Memory, Message, MessageRole, PasswordEntry, Routine, Rule, RuleDecision, Skill,
 } from "@/lib/types";
@@ -21,6 +22,7 @@ const toDot = (r: Row): Dot => ({
   status: r.status as DotStatus,
   activity: activity.get(r.id as string) ?? null,
   localAccess: r.local_access === 1,
+  approvalMode: r.approval_mode === "auto" ? "auto" : r.approval_mode === "balanced" ? "balanced" : "ask",
   model: (r.model as string) ?? null,
   createdAt: r.created_at as number,
 });
@@ -54,8 +56,9 @@ export function createDot(input: { name: string; purpose: string; instructions?:
 
 export function updateDot(
   dotId: string,
-  patch: Partial<Pick<Dot, "name" | "purpose" | "instructions" | "look" | "status" | "localAccess" | "model">>,
+  patch: Partial<Pick<Dot, "name" | "purpose" | "instructions" | "look" | "status" | "localAccess" | "model" | "approvalMode">>,
 ): Dot | null {
+  if (patch.approvalMode !== undefined && !APPROVAL_MODES.includes(patch.approvalMode)) throw new Error("Invalid approval mode");
   const cols: string[] = [];
   const vals: (string | number | null)[] = [];
   if (patch.name !== undefined) {
@@ -85,6 +88,10 @@ export function updateDot(
   if (patch.localAccess !== undefined) {
     cols.push("local_access = ?");
     vals.push(patch.localAccess ? 1 : 0);
+  }
+  if (patch.approvalMode !== undefined) {
+    cols.push("approval_mode = ?");
+    vals.push(patch.approvalMode);
   }
   if (cols.length) db().prepare(`UPDATE dots SET ${cols.join(", ")} WHERE id = ?`).run(...vals, dotId);
   const dot = getDot(dotId);

@@ -8,7 +8,7 @@ import { useStore } from "@/lib/store";
 import LookEditor from "./LookEditor";
 import { DotTriggers } from "./Triggers";
 import Dot3DLazy from "./Dot3DLazy";
-import { Empty, PageHeader, RemoveButton, RuleEditor, Section } from "./SettingsKit";
+import { ApprovalModeSelect, Empty, PageHeader, RemoveButton, RuleEditor, Section } from "./SettingsKit";
 import type { Dot } from "@/lib/types";
 
 const SCHEDULES = [
@@ -81,7 +81,8 @@ export default function SetupPane({ dot }: { dot: Dot }) {
           </div>
         </Section>
 
-        <Section eyebrow="Approvals" title="Rules" description={`${dot.name} knows when to take action and when to ask for approval. Add custom rules for more control.`}>
+        <Section id="approvals" eyebrow="Approvals" title="Approval mode & rules" description={`Choose when ${dot.name} should ask. Custom rules take priority over its approval mode.`}>
+          <ApprovalModeSelect dot={dot} />
           <RuleEditor dotId={dot.id} name={dot.name} />
         </Section>
 
@@ -152,7 +153,7 @@ export default function SetupPane({ dot }: { dot: Dot }) {
           </div>
         </Section>
 
-        <Section eyebrow="Automation" title="Triggers" description={`Wake ${dot.name} when something happens in your apps, like a new email or a Slack mention. It runs in its own chat and still asks before sending anything.`}>
+        <Section eyebrow="Automation" title="Triggers" description={`Wake ${dot.name} when something happens in your apps, like a new email or a Slack mention. It runs in its own chat using your approval mode and rules.`}>
           <DotTriggers dot={dot} />
         </Section>
 

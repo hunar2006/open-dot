@@ -24,7 +24,15 @@ Closing the window leaves Open Dot running in the notification-area tray. Double
 
 OpenAI/model routers: add a key in Settings and choose a model under the matching provider heading. TokenRouter services on `.com`, `.io` and `.me` have separate presets; confirm the issuer and displayed API URL. Router credentials are sent only to that selected endpoint. If `/models` is unavailable, enter exact model IDs from your dashboard. Voice still requires a genuine OpenAI key. See `docs/model-routers.md` in the source repository. Composio apps require account connection; developer triggers may also require Composio configuration. E2B requires an E2B key and an eligible plan. Live provider access and paid requests have not been tested.
 
-Local commands use Windows PowerShell and ask for approval by default. A dot's local workspace is a folder, not an operating-system sandbox. The separate access switch controls the user-machine command tool. Docker mode requires a working Linux Docker engine; E2B uses a Linux cloud desktop. Browser takeover operates the dot's browser, rather than arbitrary Windows applications.
+Local commands use Windows PowerShell. To reduce repeated prompts, open your dot's **Setup (sliders) > Approval mode & rules**, or use **Approvals** in its chat header on larger screens:
+
+- **Ask when needed:** the bot's selected model reviews each sensitive action/command, allowing clearly routine workspace work and asking for risky or uncertain effects. A failed review still asks. These reviews use your configured provider and may consume tokens.
+- **Ask before actions:** preserves the earlier default: local commands and sensitive actions ask first.
+- **Auto approve:** commands and actions run without ordinary approval prompts, including changes on your PC and in connected apps. Choose this only for a dot you trust with those tasks.
+
+The mode persists per dot across chats, routines and restarts. Approve or deny a request that was already waiting once; the new mode applies to following actions. Custom **Ask first/Never allow** rules and built-in safety checks still apply in every mode; actual questions and OAuth connections still require your input. Rule matching and balanced risk assessment use a model, rather than an OS security boundary. **Always allow** on a card saves a rule for that particular action; choose a mode to cover changing commands.
+
+A dot's local workspace is a folder, not an operating-system sandbox. The separate access switch controls the user-machine command tool; changing approval mode does not grant that access. Docker mode requires a working Linux Docker engine; E2B uses a Linux cloud desktop. Browser takeover operates the dot's browser, rather than arbitrary Windows applications.
 
 ## Data and recovery
 

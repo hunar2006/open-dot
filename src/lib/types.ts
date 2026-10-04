@@ -33,6 +33,8 @@ export type Look = {
 };
 
 export type DotStatus = "idle" | "working" | "waiting" | "paused";
+export const APPROVAL_MODES = ["ask", "balanced", "auto"] as const;
+export type ApprovalMode = (typeof APPROVAL_MODES)[number];
 
 export type Dot = {
   id: string;
@@ -43,6 +45,7 @@ export type Dot = {
   status: DotStatus;
   activity: string | null; // e.g. "Searching the web"
   localAccess: boolean; // may this dot run things on the user's own computer?
+  approvalMode: ApprovalMode;
   model: string | null; // null = use the default model
   createdAt: number;
 };

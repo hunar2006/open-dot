@@ -468,6 +468,9 @@ function CardRow({ m }: { m: Message }) {
                 Always allow
               </button>
             )}
+            <Link href={`/dots/${m.dotId}?tab=setup#approvals`} className="btn-quiet text-[12px]">
+              Approval settings
+            </Link>
           </div>
         )}
 

@@ -11,6 +11,8 @@ const { ROUTER_PROVIDERS } = await import("../src/lib/model-providers.ts");
 const root = path.resolve(import.meta.dirname, "..");
 const commandCode = process.argv.includes("--commandcode");
 const brokenHistory = process.argv.includes("--broken-history");
+const approvalModes = process.argv.includes("--approval-modes");
+assert(!approvalModes || commandCode, "Approval mode smoke requires --commandcode");
 const arg = (name, fallback) => process.argv.includes(name) ? process.argv[process.argv.indexOf(name) + 1] : fallback;
 const reloads = Number(arg("--reloads", "0"));
 assert(Number.isInteger(reloads) && reloads >= 0 && reloads <= 30, "Reload count must be between 0 and 30");
@@ -45,9 +47,17 @@ globalThis.fetch = async (input, init = {}) => {
     try { validTools(body.messages); }
     catch(err) { return Response.json({error:{message:err.message}},{status:400}); }
     if (method === "POST" && url.pathname.endsWith("/chat/completions")) {
-      const text = body.response_format ? '{"applying_rules":[]}' : body.stream ? "Chat Completion route completed the offline demo." : "Command Code demo";
+      const content = body.messages.findLast(m=>m.role==="user")?.content;
+      const userText = typeof content === "string" ? content : (content ?? []).map(b=>b.text ?? "").join("");
+      const mode = ${approvalModes} ? /^Approval mode (auto|balanced|ask|risky)$/.exec(userText)?.[1] : null;
+      const riskReview = body.response_format?.json_schema?.schema?.properties?.requires_approval;
+      const text = body.response_format ? JSON.stringify({applying_rules:[],...(riskReview ? {requires_approval:userText.includes("mode_risky"),reason:userText.includes("mode_risky")?"Synthetic uncertain effect":"Synthetic routine workspace work"} : {})}) : mode ? mode+" mode finished." : body.stream ? "Chat Completion route completed the offline demo." : "Command Code demo";
       const c = {id:"chat_cmd",model:body.model,choices:[{index:0,message:{role:"assistant",content:text},finish_reason:"stop"}]};
       if (!body.stream) return Response.json(c);
+      if (mode && !body.messages.some(m=>m.role==="tool" && m.tool_call_id==="mode_"+mode+"_0")) {
+        const tool_calls=Array.from({length:mode==="balanced"||mode==="auto"?2:1},(_,i)=>({index:i,id:"mode_"+mode+"_"+i,type:"function",function:{name:"run_command",arguments:JSON.stringify({command:"'mode-fixture' | "+(i?"Add-Content":"Set-Content")+" -LiteralPath mode_"+mode+".txt"})}}));
+        return new Response('data: '+JSON.stringify({id:c.id,model:body.model,choices:[{index:0,delta:{tool_calls},finish_reason:"tool_calls"}]})+'\\n\\ndata: [DONE]\\n\\n',{headers:{"Content-Type":"text/event-stream"}});
+      }
       return new Response('data: '+JSON.stringify({id:c.id,model:body.model,choices:[{index:0,delta:{content:text},finish_reason:"stop"}]})+'\\n\\ndata: [DONE]\\n\\n',{headers:{"Content-Type":"text/event-stream"}});
     }
     if (method === "POST" && url.pathname.endsWith("/messages") && body.stream) {
@@ -129,6 +139,48 @@ try {
     await composer.fill("Check the other Command Code protocol.");
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await page.getByText("Chat Completion route completed the offline demo.", { exact: true }).waitFor({ timeout: 30000 });
+    if (approvalModes) {
+      const base = new URL(page.url()).origin + new URL(page.url()).pathname;
+      const dotId = new URL(page.url()).pathname.split("/").pop();
+      await page.goto(base + "?tab=setup#approvals");
+      const setupMode = page.locator("#approvals").getByLabel("Approval mode", { exact: true });
+      assert.equal(await setupMode.inputValue(), "ask");
+      await setupMode.selectOption("balanced");
+      await setupMode.waitFor({ state: "visible" });
+      await page.waitForFunction(() => [...document.querySelectorAll('#approvals select')].some(s=>!s.disabled && s.value==="balanced"));
+      await page.reload(); assert.equal(await setupMode.inputValue(), "balanced");
+      await page.screenshot({path:path.join(evidence,"windows-approval-modes.png")});
+      await page.goto(base);
+      await composer.fill("Approval mode balanced"); await page.getByRole("button",{name:"Send",exact:true}).click();
+      await page.getByText("balanced mode finished.",{exact:true}).waitFor({timeout:30000});
+      assert.equal(await page.getByRole("button",{name:"Approve",exact:true}).count(),0);
+      // Sensitive/uncertain review still creates a real card; the model does not execute before approval.
+      await composer.fill("Approval mode risky"); await page.getByRole("button",{name:"Send",exact:true}).click();
+      await page.getByRole("button",{name:"Approve",exact:true}).waitFor({timeout:30000});
+      assert(!fs.existsSync(path.join(profile,"data/dots",dotId,"workspace/mode_risky.txt")));
+      await page.getByRole("link",{name:"Approval settings",exact:true}).click();
+      await page.locator("#approvals").waitFor();
+      await page.goto(base); await page.getByRole("button",{name:"Approve",exact:true}).click();
+      await page.getByText("risky mode finished.",{exact:true}).waitFor({timeout:30000});
+      const headerMode = page.getByLabel("Approval mode",{exact:true});
+      await headerMode.selectOption("auto");
+      await page.waitForFunction(() => [...document.querySelectorAll('select[aria-label="Approval mode"]')].some(s=>!s.disabled&&s.value==="auto"));
+      await page.reload(); assert.equal(await headerMode.inputValue(),"auto");
+      await composer.fill("Approval mode auto"); await page.getByRole("button",{name:"Send",exact:true}).click();
+      await page.getByText("auto mode finished.",{exact:true}).waitFor({timeout:30000});
+      assert.equal(await page.getByRole("button",{name:"Approve",exact:true}).count(),0);
+      for (const mode of ["auto","balanced"]) assert.equal(fs.readFileSync(path.join(profile,"data/dots",dotId,"workspace/mode_"+mode+".txt"),"utf8").trim().split(/\r?\n/).length,2,"Each command must execute exactly once");
+      await page.setViewportSize({width:390,height:860}); await page.goto(base+"?tab=setup#approvals");
+      await setupMode.selectOption("ask");
+      await page.waitForFunction(() => [...document.querySelectorAll('#approvals select')].some(s=>!s.disabled&&s.value==="ask"));
+      await page.goto(base); await composer.fill("Approval mode ask"); await page.getByRole("button",{name:"Send",exact:true}).click();
+      await page.getByRole("button",{name:"Approve",exact:true}).waitFor({timeout:30000});
+      assert(!fs.existsSync(path.join(profile,"data/dots",dotId,"workspace/mode_ask.txt")));
+      await page.getByRole("button",{name:"Approve",exact:true}).click();
+      await page.getByText("ask mode finished.",{exact:true}).waitFor({timeout:30000});
+      await page.setViewportSize({width:1300,height:860});
+      console.log("PASS: packaged UI approval modes, Setup/header saves and reload persistence, repeated balanced/auto commands execute once without approval, risk/ask cards wait for approval, mobile controls and approval-settings link; synthetic provider only");
+    }
     if (brokenHistory) {
       const data = new DatabaseSync(path.join(profile, "data/dots.db"));
       try { assert.equal(data.prepare("SELECT COUNT(*) n FROM memories").get().n, 0, "Recovery must not execute the legacy action"); }

@@ -15,7 +15,7 @@ import * as triggers from "@/server/triggers";
 import * as composio from "@/server/composio";
 import * as voice from "@/server/voice";
 import { autoTitle } from "@/server/titles";
-import type { Attachment, Dot, Look, RuleDecision, TriggerApp, TriggerType } from "@/lib/types";
+import type { ApprovalMode, Attachment, Dot, Look, RuleDecision, TriggerApp, TriggerType } from "@/lib/types";
 
 // All mutations go through here; the UI updates from the event stream, not from return values.
 
@@ -32,6 +32,10 @@ export async function createDot(input: { name: string; purpose: string; look: Lo
 
 export async function updateDot(dotId: string, patch: Partial<Pick<Dot, "name" | "purpose" | "instructions" | "look">>) {
   repo.updateDot(dotId, patch);
+}
+
+export async function setApprovalMode(dotId: string, mode: ApprovalMode) {
+  repo.updateDot(dotId, { approvalMode: mode });
 }
 
 export async function deleteDot(dotId: string) {

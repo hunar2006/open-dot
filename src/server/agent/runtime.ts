@@ -293,6 +293,7 @@ async function drive(dot: Dot, prevId: string | null, input: ResponseInputItem[]
 
 /** Stream one model response, mirroring text into the transcript as it arrives. */
 async function respond(dot: Dot, prevId: string | null, input: ResponseInputItem[], trigger: Trigger, signal: AbortSignal): Promise<Response> {
+  dot = repo.getDot(dot.id) ?? dot; // Pick up approval-mode changes at the next model turn.
   const appModel = await modelFor(dot.model);
   const { client, model, stateless } = clientFor(appModel);
   const tools: Tool[] = [
@@ -461,7 +462,16 @@ async function processCalls(dot: Dot, pending: Pending, signal: AbortSignal): Pr
       return pauseFor(dot, pending, { kind: "question", status: "pending", title: String(args.question ?? ""), options: (args.options as string[]) ?? [] });
     }
     if (def.pause === "approval") {
-      return pauseFor(dot, pending, { kind: "approval", status: "pending", title: String(args.action ?? ""), detail: String(args.details ?? ""), tool: def.name });
+      const action = String(args.action ?? "");
+      const verdict = await review(dot.id, action, "ask", String(args.details ?? ""));
+      if (verdict.decision === "ask") {
+        return pauseFor(dot, pending, { kind: "approval", status: "pending", title: action,
+          detail: [String(args.details ?? ""), verdict.reason].filter(Boolean).join("\n\n"), tool: def.name });
+      }
+      pending.outputs.push({ type: "function_call_output", call_id: call.call_id, output: verdict.decision === "allow"
+        ? "Authorized by the user's approval settings. Continue with the task; don't ask again for this permission."
+        : "Not allowed by the user's rule. Do not perform this action or work around the restriction." });
+      continue;
     }
 
     if (def.pause === "connect") {
@@ -494,7 +504,7 @@ async function processCalls(dot: Dot, pending: Pending, signal: AbortSignal): Pr
     if (def.describe) {
       const action = def.describe(args, ctx);
       repo.setActivity(dot.id, "Checking your rules");
-      const verdict = await review(dot.id, action, (await def.defaultDecision?.(ctx, args)) ?? "allow");
+      const verdict = await review(dot.id, action, (await def.defaultDecision?.(ctx, args)) ?? "allow", JSON.stringify({ tool: def.name, args }));
       if (verdict.decision === "never") {
         activity(dot.id, "Blocked by your rule", verdict.rule?.action);
         pending.outputs.push({ type: "function_call_output", call_id: call.call_id, output: `Not allowed: the user's rule says never ${verdict.rule?.action ?? "do this"}. Don't try to work around it.` });
@@ -503,7 +513,7 @@ async function processCalls(dot: Dot, pending: Pending, signal: AbortSignal): Pr
       if (verdict.decision === "ask") {
         return pauseFor(dot, pending, {
           kind: "approval", status: "pending", title: capitalize(action), tool: def.name, ruleAction: verdict.rule?.action ?? action,
-          detail: [def.detail?.(args), verdict.rule ? `Your rule: ask first when it wants to ${verdict.rule.action}.` : null].filter(Boolean).join("\n\n") || undefined,
+          detail: [def.detail?.(args), verdict.rule ? `Your rule: ask first when it wants to ${verdict.rule.action}.` : verdict.reason].filter(Boolean).join("\n\n") || undefined,
         });
       }
     }
