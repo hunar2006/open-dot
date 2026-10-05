@@ -2,6 +2,20 @@ import OpenAI from "openai";
 import type { ChatCompletion, ChatCompletionMessageParam, ChatCompletionCreateParamsNonStreaming } from "openai/resources/chat/completions";
 import type { Response, ResponseCreateParams, ResponseInputItem, ResponseOutputItem, ResponseStreamEvent } from "openai/resources/responses/responses";
 
+export class ToolArgumentsError extends Error {
+  constructor() {
+    super("The router returned malformed tool arguments. No tool action was executed from this response. Try continuing with smaller commands.");
+  }
+}
+
+export function parseToolArguments(raw: string): Record<string, unknown> {
+  try {
+    const value = JSON.parse(raw);
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
+    return value;
+  } catch { throw new ToolArgumentsError(); }
+}
+
 /** Translate the app's Responses history to a gateway's Chat Completions protocol. */
 export function chatRequest(params: ResponseCreateParams): ChatCompletionCreateParamsNonStreaming {
   const messages: ChatCompletionMessageParam[] = [];
@@ -47,7 +61,7 @@ export function response(id: string, model: string, text: string, calls: { id: s
   if (text) output.push({ id: messageId, type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [], logprobs: [] }] });
   for (const call of calls) {
     if (!call.id || !call.name) throw new Error("The router returned an incomplete tool call.");
-    try { JSON.parse(call.arguments); } catch { throw new Error("The router returned malformed tool arguments. No action was executed."); }
+    parseToolArguments(call.arguments);
     output.push({ id: `fc_${call.id}`, type: "function_call", call_id: call.id, name: call.name, arguments: call.arguments, status: "completed" });
   }
   return { id, object: "response", created_at: Math.floor(Date.now() / 1000), status: "completed", model, output, output_text: text, error: null, incomplete_details: null } as Response;

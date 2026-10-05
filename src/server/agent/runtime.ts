@@ -6,6 +6,7 @@ import { clientFor, isReasoningModel, modelFor, supportsComputerTool } from "./c
 import { systemPrompt, type Trigger } from "./prompt";
 import { COMPUTER_ENABLED, findTool, setConsult, toolsForDot, type ToolCtx } from "./tools";
 import { review } from "./review";
+import { parseToolArguments, ToolArgumentsError } from "./router-chat";
 import * as repo from "../repo";
 import * as computer from "../computer";
 import type { ComputerAction } from "../computer/browser";
@@ -266,18 +267,26 @@ async function turn(dotId: string, text: string, trigger: Trigger, signal: Abort
 }
 
 async function drive(dot: Dot, prevId: string | null, input: ResponseInputItem[], trigger: Trigger, signal: AbortSignal) {
+  let correctedArguments = false;
   for (let step = 0; step < MAX_STEPS; step++) {
     signal.throwIfAborted();
     let resp: Response;
     try {
       resp = await respond(dot, prevId, input, trigger, signal);
     } catch (err) {
-      if (!prevId || signal.aborted || clientFor(await modelFor(dot.model)).stateless || !/previous|not found|No tool output/i.test(String(err))) throw err;
-      // The server-side thread is gone or broken: rebuild from our transcript and carry on.
-      const userText = input.filter((i) => "role" in i && i.role === "user").map((i) => ("content" in i ? String(i.content) : "")).join("\n");
-      input = [...rebuildContext(dot.id, userText), { role: "user", content: userText || "Continue." }];
-      prevId = null;
-      resp = await respond(dot, null, input, trigger, signal);
+      if (err instanceof ToolArgumentsError && !correctedArguments && !signal.aborted && clientFor(await modelFor(dot.model)).stateless) {
+        correctedArguments = true;
+        repo.addMessage({ dotId: dot.id, role: "system", text: "The model sent invalid tool arguments. Asking it to correct them once; no actions from that response were run." });
+        // respond already persisted the input/results. Do not append them twice or replay failed calls.
+        resp = await respond(dot, null, [{ role: "user", content: "Your last response contained invalid tool arguments and was rejected before any of its tools executed. Continue from the recorded results. Send tool arguments as a valid JSON object, escaping backslashes, quotes and newlines inside strings. Use smaller commands or split large file writes. Do not repeat previously completed actions." }], trigger, signal);
+      } else {
+        if (!prevId || signal.aborted || clientFor(await modelFor(dot.model)).stateless || !/previous|not found|No tool output/i.test(String(err))) throw err;
+        // The server-side thread is gone or broken: rebuild from our transcript and carry on.
+        const userText = input.filter((i) => "role" in i && i.role === "user").map((i) => ("content" in i ? String(i.content) : "")).join("\n");
+        input = [...rebuildContext(dot.id, userText), { role: "user", content: userText || "Continue." }];
+        prevId = null;
+        resp = await respond(dot, null, input, trigger, signal);
+      }
     }
     repo.setThread(dot.id, clientFor(await modelFor(dot.model)).stateless ? null : resp.id, null);
 
@@ -369,6 +378,8 @@ async function respond(dot: Dot, prevId: string | null, input: ResponseInputItem
     for (const d of drafts.values()) repo.updateMessage(d.id, { text: d.text || "…" });
   }
   if (!final) throw new Error("The model stream ended unexpectedly");
+  // Validate the entire batch before persisting or executing any of its calls (including native Responses).
+  for (const item of final.output) if (item.type === "function_call") parseToolArguments(item.arguments);
   if (stateless) repo.setHistory(dot.id, trimHistory([...history, ...replayable(final.output)]));
   return final;
 }

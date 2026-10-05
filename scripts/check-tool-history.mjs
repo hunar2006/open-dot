@@ -19,10 +19,11 @@ const originalFetch = globalThis.fetch;
 const originalError = console.error;
 const expectedFailures = [];
 console.error = (...args) => {
-  if (args[0] === "[dots] run failed" && args[1]?.message?.includes("Synthetic one-shot failure")) expectedFailures.push(args[1].message);
+  if (args[0] === "[dots] run failed" && (args[1]?.message?.includes("Synthetic one-shot failure") || args[1]?.constructor.name === "ToolArgumentsError")) expectedFailures.push(args[1].message);
   else originalError(...args);
 };
 let failNext = false;
+let scriptedCalls = [];
 const requests = [];
 
 // Provider-side protocol validation: every assistant call must get exactly one immediately following result.
@@ -70,6 +71,24 @@ globalThis.fetch = async (input, init = {}) => {
   try { validate(messages); }
   catch (err) { return Response.json({ error: { message: err.message } }, { status: 400 }); }
   if (failNext) { failNext = false; return Response.json({ error: { message: "Synthetic one-shot failure" } }, { status: 400 }); }
+  const batch = scriptedCalls.shift();
+  if (batch) {
+    let events;
+    if (url.pathname.endsWith("/messages")) {
+      events = [{ type: "message_start", message: { id: "msg_arguments", model: body.model, content: [], stop_reason: null } }];
+      batch.forEach((c, index) => events.push(
+        { type: "content_block_start", index, content_block: { type: "tool_use", id: c.call_id, name: c.name, input: {} } },
+        { type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: c.arguments } },
+        { type: "content_block_stop", index },
+      ));
+      events.push({ type: "message_delta", delta: { stop_reason: "tool_use" } }, { type: "message_stop" });
+    } else if (url.pathname.endsWith("/responses")) {
+      events = [{ type: "response.completed", response: { id: "resp_arguments", status: "completed", output: batch } }];
+    } else {
+      events = [{ id: "chat_arguments", model: body.model, choices: [{ index: 0, delta: { tool_calls: batch.map((c, index) => ({ index, id: c.call_id, type: "function", function: { name: c.name, arguments: c.arguments } })) }, finish_reason: "tool_calls" }] }];
+    }
+    return new Response(events.map(e => `data: ${JSON.stringify(e)}\n\n`).join("") + "data: [DONE]\n\n", { headers: { "Content-Type": "text/event-stream" } });
+  }
   if (url.pathname.endsWith("/messages")) {
     const events = [
       { type: "message_start", message: { id: "msg_history", model: body.model, content: [], stop_reason: null } },
@@ -159,7 +178,39 @@ try {
   }
   assert(requests.some(r => r.path.endsWith("/responses")) && requests.some(r => r.path.endsWith("/messages")) && requests.some(r => r.path.endsWith("/chat/completions")));
   assert.equal(expectedFailures.length, 6, "Both one-shot failures must be exercised on every transport");
-  console.log("PASS: actual runtime repairs interrupted history, persists results before failed requests, expires approvals, resumes safely without duplicate actions/results across Responses, Chat Completions and Claude; synthetic providers only");
+  for (const model of ["tokenrouter:fixture-model", "commandcode:claude-fixture", "openrouter:fixture-model"]) {
+    const dot = repo.createDot({ name: "Argument recovery", purpose: "Offline", look: DEFAULT_LOOK });
+    repo.updateDot(dot.id, { model, approvalMode: "auto" });
+    const conversation = repo.createConversation(dot.id);
+    const valid = call("corrected", "remember", { fact: "Corrected once" });
+    const invalid = { ...call("invalid", "remember"), arguments: '{"fact":"C:\\Users\\fixture"}' };
+    scriptedCalls = [[call("must_not_run", "remember", { fact: "Rejected batch" }), invalid], [valid]];
+    const before = requests.length;
+    await send(dot, conversation, "Remember the fixture");
+    assert.equal(requests.length - before, 3, "One correction and one tool-result continuation expected");
+    assert.equal(db().prepare("SELECT COUNT(*) n FROM memories WHERE dot_id = ?").get(dot.id).n, 1, "Only the corrected call may execute");
+    const h = history(dot, conversation);
+    assert(!h.some(i => i.call_id === "invalid" || i.call_id === "must_not_run"), "Rejected batch must not enter replay history");
+    assert.equal(h.filter(i => i.type === "function_call_output" && i.call_id === "corrected").length, 1);
+    assert(!repo.conversationMessages(conversation.id).some(m => m.text.includes("Something went wrong:")), "Malformed arguments should recover once");
+    assert.equal(h.filter(i => i.role === "user" && i.content === "Remember the fixture").length, 1, "Correction must not duplicate the original input");
+    const correctedRequest = requests[before + 1];
+    assert.equal(correctedRequest.body.model, requests[before].body.model, "Recovery must not change models");
+    assert.equal(correctedRequest.path, requests[before].path);
+    assert.equal(correctedRequest.body.max_tokens ?? correctedRequest.body.max_output_tokens, 2048, "Recovery retains the output budget");
+
+    for (const batches of [[[invalid], [invalid]], [[invalid], [valid], [invalid]]]) {
+      const retryChat = repo.createConversation(dot.id);
+      scriptedCalls = batches;
+      const count = batches.length, start = requests.length;
+      const memoriesBefore = db().prepare("SELECT COUNT(*) n FROM memories WHERE dot_id = ?").get(dot.id).n;
+      await send(dot, retryChat, "Exercise bounded correction");
+      assert.equal(requests.length - start, count, "Only one correction attempt is allowed across the whole run");
+      assert.equal(db().prepare("SELECT COUNT(*) n FROM memories WHERE dot_id = ?").get(dot.id).n, memoriesBefore + (count === 3 ? 1 : 0));
+      assert(repo.conversationMessages(retryChat.id).some(m => m.text.includes("Something went wrong:") && m.text.includes("smaller commands")), "Repeated malformed arguments must stop with an actionable error");
+    }
+  }
+  console.log("PASS: actual runtime repairs interrupted history, persists results before failed requests, expires approvals, corrects malformed arguments once per run without partial batch execution or duplicate actions/input, preserves model/output budgets and stops repeated failures across Responses, Chat Completions and Claude; synthetic providers only");
 } finally {
   globalThis.fetch = originalFetch;
   console.error = originalError;

@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import type { ResponseCreateParams, ResponseStreamEvent } from "openai/resources/responses/responses";
-import { chatRequest, chatResponses, response } from "./router-chat";
+import { chatRequest, chatResponses, response, parseToolArguments, ToolArgumentsError } from "./router-chat";
 
 type Block = { type: string; text?: string; id?: string; name?: string; input?: unknown; [key: string]: unknown };
 type Message = { id: string; model: string; content: Block[]; stop_reason: string | null };
@@ -60,7 +60,8 @@ function completed(message: Message) {
   if (!message.id || !message.model || !Array.isArray(message.content)) throw new Error("Command Code returned an incomplete message. No tool action was executed.");
   const text = message.content.filter((b) => b.type === "text").map((b) => b.text ?? "").join("");
   const calls = message.content.filter((b) => b.type === "tool_use").map((b) => {
-    if (!b.id || !b.name || !b.input || typeof b.input !== "object" || Array.isArray(b.input)) throw new Error("Command Code returned malformed tool arguments. No action was executed.");
+    if (!b.id || !b.name) throw new Error("Command Code returned an incomplete tool call. No action was executed.");
+    if (!b.input || typeof b.input !== "object" || Array.isArray(b.input)) throw new ToolArgumentsError();
     return { id: b.id, name: b.name, arguments: JSON.stringify(b.input) };
   });
   return response(message.id, message.model, text, calls, message.id);
@@ -99,7 +100,7 @@ export function commandCodeResponses(client: OpenAI): OpenAI {
           } else if (event.type === "content_block_stop") {
             const state = blocks.get(event.index!);
             if (!state || state.closed) throw new Error("Invalid block stop");
-            if (state.json) state.block.input = JSON.parse(state.json);
+            if (state.json) state.block.input = parseToolArguments(state.json);
             state.closed = true;
           } else if (event.type === "message_delta") {
             if (!message) throw new Error("Missing message start");
@@ -112,8 +113,9 @@ export function commandCodeResponses(client: OpenAI): OpenAI {
         const final = completed(message);
         for (const [output_index, item] of final.output.entries()) yield { type: "response.output_item.done", item, output_index, sequence_number: sequence++ };
         yield { type: "response.completed", response: final, sequence_number: sequence++ };
-      } catch {
+      } catch (err) {
         options?.signal?.throwIfAborted();
+        if (err instanceof ToolArgumentsError) throw err;
         throw new Error("Command Code's Claude stream failed or ended early. No tool action was executed.");
       }
     })();

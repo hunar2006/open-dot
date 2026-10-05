@@ -88,11 +88,14 @@ globalThis.fetch = async (input, init = {}) => {
 };
 const routers = await import("../src/server/agent/routers.ts");
 const { clientFor, canThink, modelFor, models, resetModels, saveApiKey } = await import("../src/server/agent/client.ts");
-const { chatRequest } = await import("../src/server/agent/router-chat.ts");
+const { chatRequest, parseToolArguments, ToolArgumentsError } = await import("../src/server/agent/router-chat.ts");
 const { anthropicRequest } = await import("../src/server/agent/router-anthropic.ts");
 const { db, getSetting, setSetting } = await import("../src/server/db.ts");
 const { seal } = await import("../src/server/vault.ts");
 try {
+  for (const raw of ['{"command":"C:\\Users"}', "null", "[]", "true", '"command"']) assert.throws(() => parseToolArguments(raw), ToolArgumentsError);
+  const powershell = { command: 'Get-Content "C:\\Users\\fixture\\data.json"\nWrite-Output "done"' };
+  assert.deepEqual(parseToolArguments(JSON.stringify(powershell)), powershell, "Valid PowerShell escapes must remain unchanged");
   assert(!canThink());
   assert.match(await saveApiKey("tr_synthetic-only"), /router key/);
   assert.equal(requests.length, 0, "Wrong-provider keys must not be sent to OpenAI");
